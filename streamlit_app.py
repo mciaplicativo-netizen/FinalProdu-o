@@ -213,7 +213,7 @@ k2.markdown(f"<div class='metric-card'><div>Eficiência Média</div><div style='
 k3.markdown(f"<div class='metric-card'><div>Total de Ciclos</div><div style='font-size:22px;font-weight:700'>{total_ciclos if total_ciclos else '—'}</div></div>", unsafe_allow_html=True)
 k4.markdown(f"<div class='metric-card'><div>Kg Aparas</div><div style='font-size:22px;font-weight:700'>{aparas:.2f if aparas else '—'}</div></div>", unsafe_allow_html=True)
             # Totais de Kg
-            total_kg_pecas = float(df["Kg"].sum()) if "Kg" in df.columns else None
+total_kg_pecas = float(df["Kg"].sum()) if "Kg" in df.columns else None
             st.write("**Totais (Kg)**")
             st.write(f"Kg de Peças: {total_kg_pecas:.2f}" if total_kg_pecas is not None else "Kg de Peças: —")
 
