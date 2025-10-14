@@ -1,6 +1,3 @@
-# Produção & Estoque - Dashboard
+Produção & Estoque - Dashboard v3
 
-Versão com menu lateral e dashboard de Produção.
-
-Use `streamlit run streamlit_app.py` to start locally.
-Keep backups of the Excel file before using write features.
+Novas telas: produção com KPIs, estoque injetados com movimentação, apontamentos online.
