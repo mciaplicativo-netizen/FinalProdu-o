@@ -157,7 +157,7 @@ tabs = st.tabs(["Estoque MP", "Estoque Injetados", "Produção", "Admin"])
 with tabs[0]:
     st.header("Estoque MP")
     df_mp = dfs.get("estoque_mp", pd.DataFrame(columns=["mp_id","mp_nome","quantidade","unidade","local"]))
-    edited = st.experimental_data_editor(df_mp, num_rows="dynamic")
+    edited = st.data_editor(df_mp, num_rows="dynamic")
     if st.button("Salvar Estoque MP"):
         write_table("estoque_mp", edited)
         # also write to excel
@@ -168,7 +168,7 @@ with tabs[0]:
 with tabs[1]:
     st.header("Estoque Injetados")
     df_inj = dfs.get("estoque_injetados", pd.DataFrame(columns=["sku","nome","quantidade","unidade","local"]))
-    edited2 = st.experimental_data_editor(df_inj, num_rows="dynamic")
+    edited2 = st.data_editor(df_inj, num_rows="dynamic")
     if st.button("Salvar Estoque Injetados"):
         write_table("estoque_injetados", edited2)
         write_excel_sheets({"Estoque Injetados": edited2})
