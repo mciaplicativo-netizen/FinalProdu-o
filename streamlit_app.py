@@ -1,168 +1,270 @@
 """
-Production & Inventory control - Streamlit starter app
-Place this repository on GitHub and then deploy on Streamlit Cloud (recommended).
-This starter app expects an Excel file with sheets for Materials (MP), Inventory, and Production Orders.
-It includes:
-- Dashboard (inventory levels, reorder alerts)
-- Production Order creation (consumes materials)
-- Inventory adjustments (receipts / returns)
-- CSV export of current inventory
-
-Adapt the sheet names and columns to your actual spreadsheet (example names: "MP", "Inventory", "Production")
+Streamlit app - Produção & Estoque (sincronizado com SQLite e Excel)
+- Ao iniciar: importa sheets do Excel para SQLite (se existirem)
+- Atualizações via app gravam no SQLite e reaplicam as sheets no Excel
+- Mapeamento automático de sheets detectadas:
+    * "Estoque MP" -> estoque_mp
+    * "Estoque Injetados" -> estoque_injetados
+    * "Produção - injeção+ Zamac" -> producao
 """
 
 import streamlit as st
 import pandas as pd
+import sqlite3
+from pathlib import Path
+import threading
+import time
+import json
 from io import BytesIO
 
-st.set_page_config(page_title="Produção & Estoque", layout="wide")
+APP_DIR = Path(".")
+DB_PATH = APP_DIR / "database.db"
+XLSX_PATH = APP_DIR / "Indicadores_CPP1.xlsx"
+LOCK_PATH = APP_DIR / ".write_lock"
 
-st.title("Produção & Controle de Estoque (Starter)")
+st.set_page_config(page_title="Produção & Estoque (Sincronizado)", layout="wide")
+st.title("Produção & Estoque — SQLite ⇄ Excel (sincronizado)")
 
-# --- Load data ---
-uploaded = st.sidebar.file_uploader("Upload Excel (ou use arquivo padrão 'Indicadores CPP1.xlsx')", type=["xlsx","xls"])
-use_default = False
-if uploaded is None:
+def with_lock(fn):
+    def wrapper(*args, **kwargs):
+        # Simple file lock
+        while LOCK_PATH.exists():
+            time.sleep(0.1)
+        try:
+            LOCK_PATH.write_text("lock")
+            return fn(*args, **kwargs)
+        finally:
+            if LOCK_PATH.exists():
+                LOCK_PATH.unlink()
+    return wrapper
+
+@with_lock
+def write_excel_sheets(sheet_dfs: dict):
+    """
+    Escreve (ou substitui) as sheets fornecidas no arquivo Excel, preservando outras sheets.
+    sheet_dfs: dict of sheet_name -> DataFrame
+    """
+    from openpyxl import load_workbook
+    # If file doesn't exist, create new with the sheets
+    if not XLSX_PATH.exists():
+        with pd.ExcelWriter(XLSX_PATH, engine="openpyxl") as writer:
+            for name, df in sheet_dfs.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+        return
+    # Load existing workbook
+    wb = load_workbook(XLSX_PATH)
+    # Remove sheets that we will overwrite if they exist
+    for name in list(sheet_dfs.keys()):
+        if name in wb.sheetnames:
+            std = wb[name]
+            wb.remove(std)
+    # Save workbook temporarily then append sheets via pandas
+    wb.save(XLSX_PATH)
+    with pd.ExcelWriter(XLSX_PATH, engine="openpyxl", mode="a") as writer:
+        for name, df in sheet_dfs.items():
+            df.to_excel(writer, sheet_name=name, index=False)
+
+def read_excel_sheets(names):
+    """Lê as sheets especificadas do Excel se existirem; retorna dict name->df"""
+    out = {}
+    if not XLSX_PATH.exists():
+        return out
     try:
-        default_path = "Indicadores_CPP1.xlsx"
-        df_sheets = pd.read_excel(default_path, sheet_name=None)
-        use_default = True
+        xls = pd.ExcelFile(XLSX_PATH)
+    except Exception as e:
+        st.error(f"Erro ao abrir Excel: {e}")
+        return out
+    for name in names:
+        if name in xls.sheet_names:
+            out[name] = pd.read_excel(XLSX_PATH, sheet_name=name)
+    return out
+
+def init_db_from_excel(mapping):
+    """Carrega dados do excel para o DB (apenas se tabelas vazias)"""
+    conn = sqlite3.connect(DB_PATH)
+    for sheet, table in mapping.items():
+        try:
+            df = pd.read_excel(XLSX_PATH, sheet_name=sheet)
+        except Exception:
+            continue
+        # write/replace table
+        df.to_sql(table, conn, if_exists="replace", index=False)
+    conn.close()
+
+def read_table(table):
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        df = pd.read_sql_query(f"SELECT * FROM [{table}]", conn)
     except Exception:
-        df_sheets = {}
-else:
-    df_sheets = pd.read_excel(uploaded, sheet_name=None)
+        df = pd.DataFrame()
+    conn.close()
+    return df
 
-st.sidebar.markdown("### Sheets encontradas")
-for s in df_sheets.keys():
-    st.sidebar.write("- " + s)
+def write_table(table, df):
+    conn = sqlite3.connect(DB_PATH)
+    df.to_sql(table, conn, if_exists="replace", index=False)
+    conn.close()
 
-# Map likely sheet names (customize if needed)
-mp_sheet = st.sidebar.selectbox("Sheet: Matérias-primas (MP)", options=list(df_sheets.keys()) + [None], index=0 if len(df_sheets)>0 else 0)
-inventory_sheet = st.sidebar.selectbox("Sheet: Estoque", options=list(df_sheets.keys()) + [None], index=min(1,len(df_sheets)-1) if len(df_sheets)>1 else 0)
-production_sheet = st.sidebar.selectbox("Sheet: Produção/Ordens", options=list(df_sheets.keys()) + [None], index=min(2,len(df_sheets)-1) if len(df_sheets)>2 else 0)
+# Auto-detect sheets
+detected = []
+if XLSX_PATH.exists():
+    try:
+        x = pd.ExcelFile(XLSX_PATH)
+        detected = x.sheet_names
+    except Exception:
+        detected = []
 
-# Load DataFrames or create empty ones
-mp_df = pd.DataFrame()
-inv_df = pd.DataFrame()
-prod_df = pd.DataFrame()
+# Suggested mapping (customize if your sheet names differ)
+suggested = {
+    "Estoque MP": "estoque_mp",
+    "Estoque Injetados": "estoque_injetados",
+    "Produção - injeção+ Zamac": "producao"
+}
 
-if mp_sheet in df_sheets:
-    mp_df = df_sheets[mp_sheet].copy()
-if inventory_sheet in df_sheets:
-    inv_df = df_sheets[inventory_sheet].copy()
-if production_sheet in df_sheets:
-    prod_df = df_sheets[production_sheet].copy()
+# Allow user to adjust mapping
+st.sidebar.header("Mapeamento de sheets")
+user_mapping = {}
+for sx, tbl in suggested.items():
+    if sx in detected:
+        newname = st.sidebar.text_input(f"Sheet fonte para '{tbl}'", value=sx, key=sx)
+        user_mapping[newname] = tbl
 
-# Normalise columns if possible
-st.sidebar.markdown("### Quick actions")
-if st.sidebar.button("Criar snapshot CSV do estoque atual"):
-    if not inv_df.empty:
-        towrite = BytesIO()
-        inv_df.to_csv(towrite, index=False)
-        towrite.seek(0)
-        st.sidebar.download_button("Download estoque.csv", towrite, file_name="estoque_snapshot.csv", mime="text/csv")
-    else:
-        st.sidebar.warning("Nenhum dado de estoque disponível.")
+st.sidebar.markdown("---")
+st.sidebar.header("Operações")
+uploaded = st.sidebar.file_uploader("Substituir arquivo Excel (opcional)", type=["xlsx","xls"])
+if uploaded is not None:
+    # overwrite local copy
+    with open(XLSX_PATH, "wb") as f:
+        f.write(uploaded.getbuffer())
+    st.sidebar.success("Arquivo Excel substituído. Recarregue a página se necessário.")
 
-# Main UI layout
-col1, col2 = st.columns([2,1])
+if st.sidebar.button("Forçar sincronização inicial (Excel -> DB)"):
+    init_db_from_excel({k:v for k,v in user_mapping.items()})
+    st.sidebar.success("Sincronização inicial realizada.")
 
-with col1:
-    st.header("1. Estoque")
-    if inv_df.empty:
-        st.info("Nenhum sheet de estoque identificado. Você pode criar manualmente abaixo.")
-        inv_df = pd.DataFrame(columns=["mp_id","mp_nome","quantidade","unidade","local"])
-    st.dataframe(inv_df)
+# On start: ensure DB exists and load initial data
+if not DB_PATH.exists() and XLSX_PATH.exists():
+    init_db_from_excel({k:v for k,v in user_mapping.items()})
 
-    st.subheader("Ajuste de estoque (entrada/saída)")
-    with st.form("ajuste_form"):
-        mp_id = st.selectbox("MP (id/nome)", options=list(inv_df["mp_id"].astype(str).tolist()) if "mp_id" in inv_df.columns else ["--nenhum--"])
-        ajuste = st.number_input("Quantidade (positivo entrada, negativo saída)", value=0.0, step=1.0)
-        motivo = st.text_input("Motivo")
-        submitted = st.form_submit_button("Aplicar ajuste")
-        if submitted:
-            # Apply change to DataFrame in session state
-            if "inv_df" not in st.session_state:
-                st.session_state.inv_df = inv_df.copy()
-            df = st.session_state.inv_df
-            if "mp_id" in df.columns and mp_id != "--nenhum--":
-                mask = df["mp_id"].astype(str) == str(mp_id)
-                if mask.any():
-                    df.loc[mask, "quantidade"] = df.loc[mask, "quantidade"].astype(float) + float(ajuste)
-                    st.success("Ajuste aplicado.")
-                else:
-                    st.error("MP não encontrada.")
-            else:
-                # create new item if no mp_id present
-                new_row = {"mp_id": mp_id, "mp_nome": mp_id, "quantidade": ajuste, "unidade":"", "local":""}
-                st.session_state.inv_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                st.success("Item criado e ajuste aplicado.")
-            st.experimental_rerun()
+# Load current tables into dataframes
+dfs = {}
+for sheet_name, table_name in user_mapping.items():
+    dfs[table_name] = read_table(table_name)
 
-with col2:
-    st.header("2. Produção")
-    st.info("Criar ordem de produção consumirá materiais do estoque (simulado).")
-    with st.form("prod_form"):
+# Show tabs: Estoque MP, Estoque Injetados, Produção
+tabs = st.tabs(["Estoque MP", "Estoque Injetados", "Produção", "Admin"])
+# Estoque MP
+with tabs[0]:
+    st.header("Estoque MP")
+    df_mp = dfs.get("estoque_mp", pd.DataFrame(columns=["mp_id","mp_nome","quantidade","unidade","local"]))
+    edited = st.experimental_data_editor(df_mp, num_rows="dynamic")
+    if st.button("Salvar Estoque MP"):
+        write_table("estoque_mp", edited)
+        # also write to excel
+        write_excel_sheets({"Estoque MP": edited})
+        st.success("Estoque MP salvo no DB e Excel.")
+
+# Estoque Injetados
+with tabs[1]:
+    st.header("Estoque Injetados")
+    df_inj = dfs.get("estoque_injetados", pd.DataFrame(columns=["sku","nome","quantidade","unidade","local"]))
+    edited2 = st.experimental_data_editor(df_inj, num_rows="dynamic")
+    if st.button("Salvar Estoque Injetados"):
+        write_table("estoque_injetados", edited2)
+        write_excel_sheets({"Estoque Injetados": edited2})
+        st.success("Estoque Injetados salvo no DB e Excel.")
+
+# Produção
+with tabs[2]:
+    st.header("Produção / Ordens")
+    df_prod = dfs.get("producao", pd.DataFrame(columns=["id","prod_code","qtd","data","bom_json"]))
+    st.subheader("Log de Ordens")
+    st.dataframe(df_prod)
+    st.subheader("Criar nova ordem de produção (consome MP)")
+    with st.form("new_prod"):
         prod_code = st.text_input("Código do produto")
-        qtd_prod = st.number_input("Quantidade a produzir", value=1, step=1)
-        # For simplicity enter BOM as JSON: [{'mp_id':'M001','qty_per_product':0.5}, ...]
-        bom_text = st.text_area("BOM (JSON) - lista de componentes com 'mp_id' e 'qty_per_product'", value="[]", height=120)
-        submit_prod = st.form_submit_button("Criar ordem e consumir MP")
-        if submit_prod:
-            import json
+        qtd = st.number_input("Quantidade", value=1, step=1)
+        bom = st.text_area("BOM JSON (ex: [{'mp_id':'M001','qty_per_product':0.5}])", value="[]", height=120)
+        submit = st.form_submit_button("Criar ordem")
+        if submit:
             try:
-                bom = json.loads(bom_text)
-                if "inv_df" not in st.session_state:
-                    st.session_state.inv_df = inv_df.copy()
-                df = st.session_state.inv_df
-                # Check availability
+                bom_list = json.loads(bom)
+            except Exception as e:
+                st.error("BOM inválido: " + str(e))
+                bom_list = []
+            # read current estoque_mp
+            estoque_mp = read_table("estoque_mp")
+            if estoque_mp.empty:
+                st.error("Estoque MP vazio. Impossível consumir.")
+            else:
+                # verify availability
                 insufficient = []
-                for comp in bom:
+                for comp in bom_list:
                     mid = str(comp.get("mp_id"))
-                    need = float(comp.get("qty_per_product",0))*float(qtd_prod)
-                    mask = df["mp_id"].astype(str)==mid if "mp_id" in df.columns else pd.Series([False]*len(df))
+                    need = float(comp.get("qty_per_product",0)) * float(qtd)
+                    mask = estoque_mp["mp_id"].astype(str) == mid if "mp_id" in estoque_mp.columns else pd.Series([False]*len(estoque_mp))
                     if not mask.any():
                         insufficient.append(f"{mid} (não encontrado)")
                     else:
-                        avail = float(df.loc[mask,"quantidade"].sum())
-                        if avail < need:
-                            insufficient.append(f"{mid} (falta {need-avail})")
+                        avail = float(estoque_mp.loc[mask,"quantidade"].sum())
+                        if avail < need - 1e-9:
+                            insufficient.append(f"{mid} (falta {need-avail:.3f})")
                 if insufficient:
                     st.error("MP insuficiente: " + "; ".join(insufficient))
                 else:
-                    # consume
-                    for comp in bom:
+                    # consume from estoque_mp (proporcional)
+                    for comp in bom_list:
                         mid = str(comp.get("mp_id"))
-                        need = float(comp.get("qty_per_product",0))*float(qtd_prod)
-                        mask = df["mp_id"].astype(str)==mid
-                        # subtract proportionally from matching rows
-                        idxs = df.loc[mask].index
+                        need = float(comp.get("qty_per_product",0)) * float(qtd)
+                        mask = estoque_mp["mp_id"].astype(str) == mid
+                        idxs = estoque_mp.loc[mask].index
                         remaining = need
                         for ix in idxs:
-                            take = min(remaining, float(df.at[ix,"quantidade"]))
-                            df.at[ix,"quantidade"] = float(df.at[ix,"quantidade"]) - take
+                            take = min(remaining, float(estoque_mp.at[ix,"quantidade"]))
+                            estoque_mp.at[ix,"quantidade"] = float(estoque_mp.at[ix,"quantidade"]) - take
                             remaining -= take
                             if remaining <= 1e-9:
                                 break
-                    st.success("Ordem criada e MP consumida (simulado).")
-                    # record production order in session
-                    if "prod_log" not in st.session_state:
-                        st.session_state.prod_log = []
-                    st.session_state.prod_log.append({"prod_code":prod_code,"qtd":qtd_prod,"bom":bom})
-                    st.experimental_rerun()
-            except Exception as e:
-                st.error("Erro ao ler BOM JSON: " + str(e))
+                    # write back estoque_mp and record production
+                    write_table("estoque_mp", estoque_mp)
+                    # append to producao table
+                    prod_table = read_table("producao")
+                    import datetime
+                    new_id = int(prod_table["id"].max())+1 if (not prod_table.empty and "id" in prod_table.columns) else 1
+                    bom_json = json.dumps(bom_list, ensure_ascii=False)
+                    new_row = {"id": new_id, "prod_code": prod_code, "qtd": int(qtd), "data": datetime.datetime.now().isoformat(), "bom_json": bom_json}
+                    prod_table = pd.concat([prod_table, pd.DataFrame([new_row])], ignore_index=True)
+                    write_table("producao", prod_table)
+                    # persist both tables to Excel
+                    write_excel_sheets({"Estoque MP": estoque_mp, "Produção - injeção+ Zamac": prod_table})
+                    st.success("Ordem criada, MP consumida, DB e Excel atualizados.")
 
-st.sidebar.markdown("---")
-st.sidebar.header("Export & Persistência")
-if st.sidebar.button("Exportar estoque atual para CSV"):
-    df = st.session_state.get("inv_df", inv_df)
-    towrite = BytesIO()
-    df.to_csv(towrite, index=False)
-    towrite.seek(0)
-    st.sidebar.download_button("Download CSV", towrite, file_name="estoque_atual.csv", mime="text/csv")
+with tabs[3]:
+    st.header("Admin")
+    st.write("Banco:", DB_PATH)
+    st.write("Excel:", XLSX_PATH)
+    if st.button("Forçar reescrita de todas sheets do DB para Excel"):
+        # Read all three tables and write to excel
+        d1 = read_table("estoque_mp")
+        d2 = read_table("estoque_injetados")
+        d3 = read_table("producao")
+        towrite = {}
+        if not d1.empty:
+            towrite["Estoque MP"] = d1
+        if not d2.empty:
+            towrite["Estoque Injetados"] = d2
+        if not d3.empty:
+            towrite["Produção - injeção+ Zamac"] = d3
+        if towrite:
+            write_excel_sheets(towrite)
+            st.success("Sheets regravadas no Excel.")
+        else:
+            st.info("Nenhuma tabela para gravar.")
+    st.markdown("### Backup")
+    if st.button("Criar backup do Excel (copy)"):
+        import shutil, datetime
+        dst = XLSX_PATH.parent / f"backup_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        shutil.copy2(XLSX_PATH, dst)
+        st.success(f"Backup criado: {dst.name}")
 
-st.sidebar.markdown("**Instruções rápidas**")
-st.sidebar.caption("1) Ajuste colunas e nomes das sheets conforme sua planilha.
-2) Suba este repositório no GitHub e conecte no Streamlit Cloud para deploy.
-3) Para integração completa, substitua armazenamento em session_state por um banco (SQLite / Postgres).")
+st.sidebar.caption("""1) Ajuste nomes das sheets no mapeamento se necessário.\n2) Este app regrava as sheets indicadas no arquivo Excel — mantenha backup.\n3) Em ambientes concorrentes, evite editar o Excel manualmente enquanto o app salva.""")
