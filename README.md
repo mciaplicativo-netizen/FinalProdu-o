@@ -1,10 +1,6 @@
-# Produção & Estoque - Streamlit (Sincronizado com SQLite & Excel)
+# Produção & Estoque - Dashboard
 
-Este projeto implementa um app Streamlit que sincroniza dados entre um arquivo Excel e um banco SQLite local.
-- Ao iniciar, o app pode importar dados do Excel para o DB.
-- Todas as alterações no app gravam no SQLite e regravem as sheets correspondentes no Excel.
+Versão com menu lateral e dashboard de Produção.
 
-**Notas importantes**
-- Sempre mantenha backup do Excel antes de usar pela primeira vez.
-- Em ambientes com múltiplos usuários simultâneos, pode haver condições de corrida. Este app usa um lock simples de arquivo para reduzir conflitos.
-- Ajuste nomes das sheets no sidebar conforme necessário.
+Use `streamlit run streamlit_app.py` to start locally.
+Keep backups of the Excel file before using write features.
