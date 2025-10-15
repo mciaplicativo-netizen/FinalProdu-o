@@ -154,8 +154,7 @@ if "Data" in prod_df.columns:
 if menu == "Produção":
     st.title("Produção — Dashboard")
 st.markdown("KPIs e visão rápida da produção.")
-
-    left, right = st.columns([1,3], gap="large")
+left, right = st.columns([1,3], gap="large")
     with left:
         st.subheader("Filtros")
         # date range
