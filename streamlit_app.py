@@ -23,7 +23,6 @@ XLSX_PATH = APP_DIR / "Indicadores_CPP1.xlsx"
 LOCK_PATH = APP_DIR / ".write_lock"
 
 st.set_page_config(page_title="Produção & Estoque - Dashboard v4", layout="wide")
-
 st.markdown(
     '''
     <style>
@@ -154,7 +153,7 @@ if "Data" in prod_df.columns:
 # ------------------ Produção ------------------
 if menu == "Produção":
     st.title("Produção — Dashboard")
-    st.markdown("KPIs e visão rápida da produção.")
+st.markdown("KPIs e visão rápida da produção.")
 
     left, right = st.columns([1,3], gap="large")
     with left:
@@ -214,8 +213,8 @@ k3.markdown(f"<div class='metric-card'><div>Total de Ciclos</div><div style='fon
 k4.markdown(f"<div class='metric-card'><div>Kg Aparas</div><div style='font-size:22px;font-weight:700'>{aparas:.2f if aparas else '—'}</div></div>", unsafe_allow_html=True)
             # Totais de Kg
 total_kg_pecas = float(df["Kg"].sum()) if "Kg" in df.columns else None
-            st.write("**Totais (Kg)**")
-            st.write(f"Kg de Peças: {total_kg_pecas:.2f}" if total_kg_pecas is not None else "Kg de Peças: —")
+st.write("**Totais (Kg)**")
+st.write(f"Kg de Peças: {total_kg_pecas:.2f}" if total_kg_pecas is not None else "Kg de Peças: —")
 
             # Observações
             st.subheader("Apontamentos / Observações")
@@ -267,7 +266,7 @@ total_kg_pecas = float(df["Kg"].sum()) if "Kg" in df.columns else None
 elif menu == "Estoque MP":
     st.title("Estoque MP")
     df_mp = tables.get("estoque_mp", pd.DataFrame(columns=["mp_id","mp_nome","quantidade","unidade","local"]))
-    st.write("Edite o estoque MP abaixo:")
+st.write("Edite o estoque MP abaixo:")
     edited_mp = st.data_editor(df_mp, num_rows="dynamic", use_container_width=True)
     if st.button("Salvar Estoque MP"):
         write_table("estoque_mp", edited_mp)
@@ -340,7 +339,7 @@ elif menu == "Estoque Injetados":
 # ------------------ Apontamentos Online ------------------
 elif menu == "Apontamentos Online":
     st.title("Apontamentos Online")
-    st.markdown("Atualize rapidamente o que está rodando por máquina. Status muda de cor visualmente.")
+st.markdown("Atualize rapidamente o que está rodando por máquina. Status muda de cor visualmente.")
     machines = ["Oriente 45", "Oriente 35", "Himaco 80", "Himaco 40", "Jasot", "MG", "Máq. 1 (Zamac)", "Máq. 2 (Zamac)"]
 
     # ensure table exists
@@ -365,9 +364,9 @@ elif menu == "Apontamentos Online":
             updated = row[3] if row else ""
             # color box based on status
             color = "#28a745" if status=="Em Injeção" else ("#dc3545" if status=="Quebra" else ("#ffc107" if status=="Setup" else "#6c757d"))
-            st.markdown(f"<div><span class='status-dot' style='background:{color}'></span><b>{status}</b></div>", unsafe_allow_html=True)
-            st.write(f"**Produto:** {prod}")
-            st.write(f"**Operador:** {oper}")
+st.markdown(f"<div><span class='status-dot' style='background:{color}'></span><b>{status}</b></div>", unsafe_allow_html=True)
+st.write(f"**Produto:** {prod}")
+st.write(f"**Operador:** {oper}")
             with st.form(f"form_{m}"):
                 p = st.text_input("Produto (código)", value=prod, key=f"prod_{m}")
                 o = st.text_input("Operador", value=oper, key=f"oper_{m}")
